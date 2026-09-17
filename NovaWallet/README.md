@@ -50,6 +50,12 @@ There is no `float`/`double`/`decimal` anywhere in the money path. ₦500,000 is
 constant `500_000_00` kobo (`TransferService.DailyLimitKobo`) so the unit is impossible to
 misread at the call site.
 
+`Wallet.Credit` uses `checked` arithmetic around the balance addition, so a credit that would
+overflow `long.MaxValue` throws a clean `BalanceOverflowException` instead of silently wrapping
+the balance around to a large negative number. At real Naira balances this is astronomically
+unlikely to matter (`long.MaxValue` kobo is on the order of tens of quadrillions of Naira) - but a
+ledger's correctness guarantees shouldn't quietly depend on "unlikely."
+
 ## Concurrency safety — the core of the exercise
 
 **Approach: pessimistic row locking via `WITH (UPDLOCK, ROWLOCK)`.**
@@ -109,6 +115,12 @@ for this exercise, I judged this an acceptable residual risk (a client reusing t
 two genuinely different transfers is itself a client-side bug) rather than something worth adding
 an additional locking mechanism for.
 
+The primary case - genuinely concurrent replays with the *same* key and *same* payload - is
+covered by a dedicated test (`Transfer_SameKeySamePayload_ConcurrentReplays_ProcessedExactlyOnce`)
+that fires 8 identical requests in parallel and asserts the debit happened exactly once and every
+response agrees on the same `TransferGroupId`, rather than relying only on sequential replay tests
+to stand in for a concurrency guarantee.
+
 ## Repository pattern + Unit of Work
 
 `Application` depends only on its own interfaces (`IWalletRepository`, `ITransactionRepository`,
@@ -123,6 +135,17 @@ that coordination is exactly what a Unit of Work is for. `IAuditLogRepository` i
 write-only (`Add` is its only member) — there is no `Update`/`Delete` to even call, so the
 append-only guarantee is enforced by the shape of the abstraction, not just by convention.
 
+`UnitOfWork.SaveChangesAsync` also translates a specific database-level failure into the matching
+domain exception: `CreateWalletAsync` checks "does this customer already have a wallet?" and then
+inserts, which isn't atomic - two concurrent requests for the same customer id can both pass that
+check before either commits. The database's unique index on `Wallets.CustomerId` is the real
+backstop, but left untranslated, the loser would see a raw, unhandled `DbUpdateException` surface
+as a generic 500. `SaveChangesAsync` catches that specific case (a unique-constraint violation
+where a `Wallet` entity was involved - the only non-primary-key unique constraint in the whole
+schema, so this is safe to assume without parsing the constraint name out of the error message)
+and re-throws it as the same `CustomerAlreadyHasWalletException` a sequential duplicate attempt
+gets, so both paths return a clean `409 Conflict`.
+
 ## Outbox pattern (`TransferCompleted` event)
 
 An `OutboxMessages` table is written inside the **same database transaction** as the transfer
@@ -135,6 +158,15 @@ here means structured logging via `ILogger` — the poll/publish/mark-published 
 part worth demonstrating, and would carry over unchanged if a real broker (Azure Service Bus,
 Kafka, etc.) were plugged in later.
 
+## Statement
+
+Paginated transaction history, newest first (`ORDER BY CreatedAt DESC`), with a secondary sort on
+`Id` as a tiebreaker. `CreatedAt` alone isn't a safe sort key for pagination — two transactions
+can legitimately share the same timestamp (`DateTimeOffset` precision, or just two writes landing
+in the same tick), and without a tiebreaker, SQL Server is free to order ties differently between
+separate page queries, which can cause a row to appear on two pages, or on neither, as data
+changes underneath. `Id` is arbitrary but stable, which is all a tiebreaker needs to be.
+
 ## Daily limit (₦500,000/day, resets at WAT midnight)
 
 Computed on the fly from the sum of `TransferOut` transactions for the wallet on the current WAT
@@ -142,14 +174,25 @@ calendar date (`DateTimeExtensions.ToWatDate`, a fixed UTC+1 offset — WAT does
 daylight saving, so this is safe as a constant offset rather than needing IANA timezone data).
 This check happens under the same wallet lock as the transfer, so two concurrent transfers that
 would each individually be under the limit, but together would breach it, cannot both succeed.
+Tests cover both sides of the boundary: a transfer of exactly the limit succeeds
+(`Transfer_AtExactlyTheDailyLimit_Succeeds`), and one kobo over fails
+(`Transfer_ExceedingDailyLimit_Throws`) - not just the over-limit case in isolation.
 
 ## Audit log
 
 `AuditLogEntries` is a separate table from `Transactions`. No application code path exposes an
-update or delete against it — `AuditLogEntry` only has a static factory method and no mutators.
-For a real production system, I'd add a database-level safeguard too (a `DENY UPDATE, DELETE`
-grant on the table, or a restricted application DB role) — noted here as a scope cut for this
-exercise rather than an oversight.
+update or delete against it — `AuditLogEntry` only has a static factory method and no mutators,
+and `IAuditLogRepository` exposes only `Add()`.
+
+This is also now enforced at the **database level**, not just in application code: an
+`INSTEAD OF UPDATE, DELETE` trigger on `AuditLogEntries` (`trg_AuditLogEntries_PreventModification`)
+rejects any attempt to modify or remove a row, regardless of which login issues it. Applied
+idempotently at API startup (`Program.cs`, right after migrations run), rather than as a real EF
+Core migration - EF migrations express schema, not trigger bodies, without dropping to raw SQL
+inside the migration anyway, and this achieves the same outcome without needing a live database
+available wherever migrations happen to be authored. A trigger is deliberately stronger than a
+`GRANT`/`DENY`-based approach here: this exercise's `docker-compose.yml` connects as `sa`, which
+would simply ignore a `DENY` grant, but cannot bypass a trigger without dropping it first.
 
 ## Auth
 
@@ -158,25 +201,88 @@ exactly as the brief allows ("a simplified/mock issuer is fine — the point is 
 claims handling, not building a full auth server"). All wallet/transfer endpoints require a valid
 bearer token (`[Authorize]`); the `sub` claim carries the customer id.
 
+`JwtBearerOptions.MapInboundClaims` is explicitly set to `false`. Without this, some JWT handler
+configurations silently remap the `sub` claim to a legacy XML claim type
+(`ClaimTypes.NameIdentifier`) for backwards compatibility - which would silently break every
+literal `"sub"` claim lookup used for authorization and rate limiting below.
+
+## Authorization: authentication alone is not enough
+
+`[Authorize]` only proves a request carries a *valid* token - on its own it says nothing about
+whether that caller should be allowed to touch the specific wallet in the URL. Every wallet and
+transfer operation additionally checks that the caller's `sub` claim matches the wallet's
+`CustomerId`:
+
+- `GetBalance`, `Credit`, `GetStatement` — the wallet in the route must belong to the caller.
+- `CreateWallet` — a caller may only create a wallet for their own customer id.
+- `Transfer` — the caller must own the **sending** wallet (`fromWalletId`). The receiving wallet
+  can belong to anyone, since that's the entire point of a P2P transfer.
+
+A mismatch throws `ForbiddenException`, mapped to `403 Forbidden`. This check happens inside
+`TransferService`/`WalletService` after the wallet is fetched (and, for transfers, after it's
+locked) - it applies uniformly regardless of whether the request turns out to be new or a replay.
+
+**Assumption worth flagging:** `CreditWalletAsync` also enforces this ownership check, even though
+a real inbound NIP settlement credit would more realistically be triggered by a trusted internal
+service, not the customer's own session. This API has no such second actor - only the
+customer-facing JWT - so applying the same ownership rule here is the safer default for what this
+endpoint can otherwise be used for today.
+
 ## Errors
 
 All exceptions map to RFC 7807 Problem Details via a single `IExceptionHandler`
-(`NovaWalletExceptionHandler`), so every error response — 400, 404, 409, 422, 500 — has the same
-shape (`type`, `title`, `status`, `detail`, `instance`, plus a `correlationId` extension).
+(`NovaWalletExceptionHandler`), so every error response — 400, 403, 404, 409, 422, 500 — has the
+same shape (`type`, `title`, `status`, `detail`, `instance`, plus a `correlationId` extension).
 Unrecognized exceptions are logged with full detail server-side but never leak internals to the
 caller.
+
+**401 and 429 are also Problem Details-shaped, and needed separate handling to get there.**
+`IExceptionHandler` only intercepts genuine .NET exceptions thrown during request processing.
+Two responses in this API never throw one: the JWT bearer handler writes a 401 directly when a
+token is missing/invalid/expired, and the rate limiter writes a 429 directly when a caller exceeds
+the limit - both by design, both without an exception ever occurring. Left alone, these would be
+bare status codes with no body, breaking the "every error has the same shape" guarantee. Fixed via
+`JwtBearerEvents.OnChallenge` and `RateLimiterOptions.OnRejected` in `Program.cs`, each writing the
+same Problem Details shape by hand.
 
 ## Stretch goals implemented
 
 - **Repository pattern + Unit of Work** — see above. `Application` has zero EF Core dependency.
 - **Outbox pattern** for `TransferCompleted` events — see above.
-- **Rate limiting** on `POST /transfers` (10 requests / 10s per authenticated subject, built-in
-  ASP.NET Core `Microsoft.AspNetCore.RateLimiting`, no extra package).
+- **Rate limiting** on `POST /transfers` (10 requests / 10s per authenticated subject - genuinely
+  per-subject: see the "Authorization" section above for why the partition key reads the `sub`
+  claim explicitly rather than `Identity.Name`).
 - **Correlation IDs**: every request gets an `X-Correlation-Id` (reused if the caller already
   sent one), pushed into the logger scope, echoed back in the response, and included in every
   Problem Details response.
 - **Health endpoints**: `GET /health/live` (process is up) and `GET /health/ready` (can reach the
   database), suitable for container orchestration liveness/readiness probes.
+
+## Hardening fixes from a self/peer review
+
+Before submitting, I ran a deliberately adversarial pass over my own implementation - the kind of
+review I'd want a panelist to do - and fixed everything that held up under scrutiny:
+
+- **Wallet ownership authorization** (see "Authorization" above) — `[Authorize]` alone proved you
+  hold a valid token, not that you should be able to touch a given wallet. Every operation now
+  checks the caller's `sub` claim against the wallet's `CustomerId`.
+- **Rate limiter was silently IP-based, not per-subject** — the partition key read
+  `Identity.Name`, which our JWT never populates, so it always fell back to IP. Fixed to read the
+  `sub` claim directly.
+- **401 and 429 weren't Problem Details-shaped** — both are written directly by middleware that
+  never throws an exception, so `IExceptionHandler` never saw them. Fixed via `OnChallenge` and
+  `OnRejected`.
+- **Integer overflow on `Wallet.Credit`** — unchecked arithmetic could theoretically wrap a
+  balance to a large negative number. Now `checked`, throwing `BalanceOverflowException`.
+- **Concurrent duplicate wallet creation returned a raw 500** — the check-then-insert race is now
+  caught at the database level and translated into the same clean `409` a sequential duplicate
+  gets (see "Repository pattern" above).
+- **Statement pagination had no tiebreaker** — `CreatedAt` alone isn't a stable sort key; added
+  `Id` as a secondary sort.
+- **Audit log immutability was only application-level** — added a database trigger that rejects
+  `UPDATE`/`DELETE` unconditionally, closing the gap even for a privileged login.
+- **Idempotency's core guarantee was only tested sequentially** — added a genuinely concurrent
+  replay test firing 8 identical requests in parallel.
 
 ## Stretch goals *not* implemented (and why)
 
@@ -185,6 +291,14 @@ caller.
   would be the next step for real observability but wasn't essential to demonstrate here.
 
 ## How to run
+
+> ⚠️ **Before submitting: the generated `Migrations/` folder must be committed to this repo.**
+> A fresh `git clone` + `docker compose up` will only create the database schema automatically if
+> the migration files are actually checked in - `Database.Migrate()` on startup applies whatever
+> migrations it finds, but applies nothing if the `Migrations/` folder is empty or missing. This
+> is the single most important thing to double-check before handing this over: run
+> `git status` after generating migrations locally and confirm `Migrations/*.cs` shows up as
+> tracked, not ignored, before your final commit.
 
 Requires Docker and Docker Compose.
 
@@ -203,17 +317,13 @@ dotnet ef migrations add InitialCreate \
   --startup-project src/NovaWallet.Api
 ```
 
-**If you already had a database from before the repository/outbox refactor:** the `OutboxMessages`
-table is new, so generate one additional migration for it (no need to re-run `InitialCreate`):
+This single `InitialCreate` migration should capture the full current schema (Wallets,
+Transactions, AuditLogEntries, IdempotencyKeys, OutboxMessages) — there's no need to layer on a
+separate `AddOutboxMessages` migration unless you're deliberately evolving an existing database
+that already has an older `InitialCreate` applied to it.
 
-```bash
-dotnet ef migrations add AddOutboxMessages \
-  --project src/NovaWallet.Infrastructure \
-  --startup-project src/NovaWallet.Api
-```
-
-`Database.Migrate()` on startup applies whichever migrations haven't run yet, so this is additive
-— it won't touch the tables `InitialCreate` already created.
+`Database.Migrate()` on startup applies whichever migrations haven't run yet, so adding a new
+migration later is additive — it won't touch tables an earlier migration already created.
 
 Commit the generated `Migrations/` folder. After that, `docker compose up` is genuinely a single
 command for anyone else checking out the repo.
@@ -274,3 +384,6 @@ dotnet test
   brief's phrasing ("daily outbound transfer limit") supports this reading.
 - "Statement" pagination defaults to 20 items per page, capped at 100, consistent with typical
   API pagination defaults.
+- A caller can only act on wallets they own (matched by the JWT's `sub` claim against
+  `Wallet.CustomerId`), including for `CreditWallet` — see the "Authorization" section above for
+  why this was applied there too despite the brief modeling credits as inbound settlements.

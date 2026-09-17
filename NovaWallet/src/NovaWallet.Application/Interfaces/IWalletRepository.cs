@@ -9,6 +9,10 @@ public interface IWalletRepository
     Task<bool> CustomerHasWalletAsync(string customerId, CancellationToken ct);
     Task<bool> ExistsAsync(Guid walletId, CancellationToken ct);
 
+    /// <summary>Looks up a customer's existing wallet by customer id (not wallet id) - used
+    /// to report which wallet already exists when CreateWallet hits a duplicate.</summary>
+    Task<Wallet?> GetByCustomerIdAsync(string customerId, CancellationToken ct);
+
     /// <summary>Plain read, no locking. Safe for balance inquiries / statements.</summary>
     Task<Wallet?> GetAsync(Guid walletId, CancellationToken ct);
 

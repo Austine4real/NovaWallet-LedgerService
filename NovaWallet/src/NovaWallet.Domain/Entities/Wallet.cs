@@ -31,7 +31,24 @@ public class Wallet
     public void Credit(long amountKobo)
     {
         if (amountKobo <= 0) throw new InvalidAmountException(amountKobo);
-        BalanceKobo += amountKobo;
+
+        // `checked` turns a silent overflow (which would wrap BalanceKobo
+        // around to a large negative number) into a clean, catchable
+        // exception instead. At realistic Naira balances this is
+        // astronomically unlikely to trigger - long.MaxValue kobo is on the
+        // order of tens of quadrillions of Naira - but a ledger should never
+        // rely on "unlikely" for a correctness guarantee.
+        checked
+        {
+            try
+            {
+                BalanceKobo += amountKobo;
+            }
+            catch (OverflowException)
+            {
+                throw new BalanceOverflowException(Id);
+            }
+        }
     }
 
     public void Debit(long amountKobo)

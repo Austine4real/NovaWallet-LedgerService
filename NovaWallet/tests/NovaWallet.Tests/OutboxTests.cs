@@ -18,16 +18,20 @@ public class OutboxTests : IClassFixture<DatabaseFixture>
         var walletService = new WalletService(uow, clock);
         var transferService = new TransferService(uow, clock);
 
+        var fromCustomerId = $"cust-{Guid.NewGuid():N}";
         var fromWallet = await walletService.CreateWalletAsync(
-            new CreateWalletRequest($"cust-{Guid.NewGuid():N}"), CancellationToken.None);
+            new CreateWalletRequest(fromCustomerId), fromCustomerId, CancellationToken.None);
         await walletService.CreditWalletAsync(
-            fromWallet.WalletId, new CreditWalletRequest(500_00, "opening balance"), CancellationToken.None);
+            fromWallet.WalletId, new CreditWalletRequest(500_00, "opening balance"), fromCustomerId, CancellationToken.None);
+
+        var toCustomerId = $"cust-{Guid.NewGuid():N}";
         var toWallet = await walletService.CreateWalletAsync(
-            new CreateWalletRequest($"cust-{Guid.NewGuid():N}"), CancellationToken.None);
+            new CreateWalletRequest(toCustomerId), toCustomerId, CancellationToken.None);
 
         var result = await transferService.TransferAsync(
             new TransferRequest(fromWallet.WalletId, toWallet.WalletId, 100_00, "outbox test"),
             Guid.NewGuid().ToString(),
+            fromCustomerId,
             CancellationToken.None);
 
         // GetUnpublishedAsync intentionally returns oldest-first, unbounded by

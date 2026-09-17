@@ -15,8 +15,13 @@ public sealed class WalletNotFoundException : DomainException
 public sealed class CustomerAlreadyHasWalletException : DomainException
 {
     public string CustomerId { get; }
-    public CustomerAlreadyHasWalletException(string customerId)
-        : base($"Customer '{customerId}' already has a wallet.") => CustomerId = customerId;
+    public Guid WalletId { get; }
+    public CustomerAlreadyHasWalletException(string customerId, Guid walletId)
+        : base($"Customer '{customerId}' already has a wallet.")
+    {
+        CustomerId = customerId;
+        WalletId = walletId;
+    }
 }
 
 public sealed class InsufficientFundsException : DomainException
@@ -69,4 +74,21 @@ public sealed class IdempotencyKeyConflictException : DomainException
 public sealed class IdempotencyKeyMissingException : DomainException
 {
     public IdempotencyKeyMissingException() : base("An Idempotency-Key header is required for this operation.") { }
+}
+
+public sealed class BalanceOverflowException : DomainException
+{
+    public BalanceOverflowException(Guid walletId)
+        : base($"Crediting wallet '{walletId}' would overflow the maximum representable balance.") { }
+}
+
+/// <summary>
+/// Raised when an authenticated caller attempts an operation against a wallet
+/// they do not own. Deliberately a distinct type from any 401-mapped
+/// exception: this is "you are who you say you are, but you can't do this,"
+/// not "you aren't authenticated at all."
+/// </summary>
+public sealed class ForbiddenException : DomainException
+{
+    public ForbiddenException(string message) : base(message) { }
 }

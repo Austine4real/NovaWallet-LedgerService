@@ -22,7 +22,7 @@ public class TransferService
         _clock = clock;
     }
 
-    public async Task<TransferResponse> TransferAsync(TransferRequest request, string idempotencyKey, CancellationToken ct)
+    public async Task<TransferResponse> TransferAsync(TransferRequest request, string idempotencyKey, string callerCustomerId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(idempotencyKey))
             throw new IdempotencyKeyMissingException();
@@ -63,6 +63,14 @@ public class TransferService
 
             var fromWallet = firstWallet.Id == request.FromWalletId ? firstWallet : secondWallet;
             var toWallet = firstWallet.Id == request.ToWalletId ? firstWallet : secondWallet;
+
+            // Ownership check happens here - after locking, before the
+            // idempotency check - so it applies uniformly whether this turns
+            // out to be a brand new transfer or a replay. Only the sender
+            // needs to be the caller; the recipient wallet can belong to
+            // anyone (that's the point of a P2P transfer).
+            if (!string.Equals(fromWallet.CustomerId, callerCustomerId, StringComparison.Ordinal))
+                throw new ForbiddenException($"You do not have access to wallet '{fromWallet.Id}'.");
 
             var existingKey = await _uow.IdempotencyKeys.FindAsync(idempotencyKey, ct);
             if (existingKey is not null)

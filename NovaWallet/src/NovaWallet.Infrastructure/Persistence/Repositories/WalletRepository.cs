@@ -15,6 +15,9 @@ public class WalletRepository : IWalletRepository
     public Task<bool> CustomerHasWalletAsync(string customerId, CancellationToken ct)
         => _db.Wallets.AnyAsync(w => w.CustomerId == customerId, ct);
 
+    public Task<Wallet?> GetByCustomerIdAsync(string customerId, CancellationToken ct)
+        => _db.Wallets.AsNoTracking().SingleOrDefaultAsync(w => w.CustomerId == customerId, ct);
+
     public Task<bool> ExistsAsync(Guid walletId, CancellationToken ct)
         => _db.Wallets.AsNoTracking().AnyAsync(w => w.Id == walletId, ct);
 

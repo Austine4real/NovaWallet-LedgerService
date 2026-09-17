@@ -28,7 +28,16 @@ public class TransactionRepository : ITransactionRepository
         return await _db.Transactions
             .AsNoTracking()
             .Where(t => t.WalletId == walletId)
+            // CreatedAt alone isn't a safe sort key for pagination - two
+            // transactions can share the same timestamp (DateTimeOffset
+            // precision, or just two writes landing in the same tick), and
+            // without a tiebreaker, SQL Server is free to order ties
+            // differently between separate page queries, which can cause a
+            // row to appear on two pages or on neither as data changes
+            // underneath. Id is arbitrary but stable, which is all a
+            // tiebreaker needs to be.
             .OrderByDescending(t => t.CreatedAt)
+            .ThenBy(t => t.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(ct);
