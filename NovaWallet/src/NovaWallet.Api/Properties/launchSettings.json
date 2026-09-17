@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "NovaWallet.Api": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:60825;http://localhost:60826"
+    }
+  }
+}

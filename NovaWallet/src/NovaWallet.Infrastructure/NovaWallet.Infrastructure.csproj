@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <!-- Needed for BackgroundService/IHostedService (OutboxPublisherService):
+         this is a plain class library, not a Web SDK project, so hosting
+         abstractions aren't pulled in implicitly the way they would be in
+         NovaWallet.Api. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.0" />
+    <!-- IServiceScopeFactory is used by OutboxPublisherService to create a
+         scope per poll cycle; referenced explicitly rather than relying on
+         it arriving transitively via EF Core. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NovaWallet.Application\NovaWallet.Application.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- No EF Core (or any persistence-technology) package reference here
+         anymore: the repository pattern (IWalletRepository, IUnitOfWork,
+         etc.) means Application depends only on its own interfaces and
+         Domain, not on any concrete persistence library. -->
+    <ProjectReference Include="..\NovaWallet.Domain\NovaWallet.Domain.csproj" />
+  </ItemGroup>
+</Project>

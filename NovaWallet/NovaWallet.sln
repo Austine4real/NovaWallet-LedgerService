@@ -1,0 +1,42 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.9.34728.123
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-0000F81E0B06}") = "NovaWallet.Domain", "src\NovaWallet.Domain\NovaWallet.Domain.csproj", "{5A2749C1-A872-4298-9BCB-A60C13C6C321}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-0000F81E0B06}") = "NovaWallet.Application", "src\NovaWallet.Application\NovaWallet.Application.csproj", "{2E55406E-6E41-4647-A2E1-A6BC9D571272}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-0000F81E0B06}") = "NovaWallet.Infrastructure", "src\NovaWallet.Infrastructure\NovaWallet.Infrastructure.csproj", "{A9DAA176-5EE5-4BA1-B689-FF6FC6F33647}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-0000F81E0B06}") = "NovaWallet.Api", "src\NovaWallet.Api\NovaWallet.Api.csproj", "{8369A2A4-3E6A-48D4-9712-4D195E6F1809}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-0000F81E0B06}") = "NovaWallet.Tests", "tests\NovaWallet.Tests\NovaWallet.Tests.csproj", "{85C16C77-973B-459E-B6B7-88A8F897F876}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5A2749C1-A872-4298-9BCB-A60C13C6C321}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5A2749C1-A872-4298-9BCB-A60C13C6C321}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5A2749C1-A872-4298-9BCB-A60C13C6C321}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5A2749C1-A872-4298-9BCB-A60C13C6C321}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2E55406E-6E41-4647-A2E1-A6BC9D571272}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2E55406E-6E41-4647-A2E1-A6BC9D571272}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2E55406E-6E41-4647-A2E1-A6BC9D571272}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2E55406E-6E41-4647-A2E1-A6BC9D571272}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A9DAA176-5EE5-4BA1-B689-FF6FC6F33647}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A9DAA176-5EE5-4BA1-B689-FF6FC6F33647}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A9DAA176-5EE5-4BA1-B689-FF6FC6F33647}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A9DAA176-5EE5-4BA1-B689-FF6FC6F33647}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8369A2A4-3E6A-48D4-9712-4D195E6F1809}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8369A2A4-3E6A-48D4-9712-4D195E6F1809}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8369A2A4-3E6A-48D4-9712-4D195E6F1809}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8369A2A4-3E6A-48D4-9712-4D195E6F1809}.Release|Any CPU.Build.0 = Release|Any CPU
+		{85C16C77-973B-459E-B6B7-88A8F897F876}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{85C16C77-973B-459E-B6B7-88A8F897F876}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{85C16C77-973B-459E-B6B7-88A8F897F876}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{85C16C77-973B-459E-B6B7-88A8F897F876}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
