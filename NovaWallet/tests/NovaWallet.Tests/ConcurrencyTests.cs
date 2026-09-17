@@ -20,6 +20,8 @@ public class ConcurrencyTests : IClassFixture<DatabaseFixture>
     private readonly DatabaseFixture _fixture;
     private Guid _sourceWalletId;
     private Guid _sinkWalletId;
+    private string _sourceCustomerId = default!;
+    private string _sinkCustomerId = default!;
 
     public ConcurrencyTests(DatabaseFixture fixture) => _fixture = fixture;
 
@@ -36,9 +38,10 @@ public class ConcurrencyTests : IClassFixture<DatabaseFixture>
         await using (var setupUow = _fixture.CreateUnitOfWork())
         {
             var walletService = new WalletService(setupUow, new TestClock());
-            _sourceWalletId = await CreateFundedWalletAsync(walletService, openingBalance);
+            (_sourceWalletId, _sourceCustomerId) = await CreateFundedWalletAsync(walletService, openingBalance);
+            _sinkCustomerId = $"cust-{Guid.NewGuid():N}";
             _sinkWalletId = (await walletService.CreateWalletAsync(
-                new CreateWalletRequest($"cust-{Guid.NewGuid():N}"), CancellationToken.None)).WalletId;
+                new CreateWalletRequest(_sinkCustomerId), _sinkCustomerId, CancellationToken.None)).WalletId;
         }
 
         var successCount = 0;
@@ -58,6 +61,7 @@ public class ConcurrencyTests : IClassFixture<DatabaseFixture>
                 await transferService.TransferAsync(
                     new TransferRequest(_sourceWalletId, _sinkWalletId, transferAmount, "concurrency test"),
                     Guid.NewGuid().ToString(),
+                    _sourceCustomerId,
                     CancellationToken.None);
                 Interlocked.Increment(ref successCount);
             }
@@ -82,20 +86,21 @@ public class ConcurrencyTests : IClassFixture<DatabaseFixture>
         await using var verifyUow = _fixture.CreateUnitOfWork();
         var verifyWalletService = new WalletService(verifyUow, new TestClock());
 
-        var sourceBalance = await verifyWalletService.GetBalanceAsync(_sourceWalletId, CancellationToken.None);
-        var sinkBalance = await verifyWalletService.GetBalanceAsync(_sinkWalletId, CancellationToken.None);
+        var sourceBalance = await verifyWalletService.GetBalanceAsync(_sourceWalletId, _sourceCustomerId, CancellationToken.None);
+        var sinkBalance = await verifyWalletService.GetBalanceAsync(_sinkWalletId, _sinkCustomerId, CancellationToken.None);
 
         Assert.Equal(0, sourceBalance.BalanceKobo);
         Assert.True(sourceBalance.BalanceKobo >= 0, "Balance must never go negative.");
         Assert.Equal(successCount * transferAmount, sinkBalance.BalanceKobo);
     }
 
-    private static async Task<Guid> CreateFundedWalletAsync(WalletService walletService, long openingBalanceKobo)
+    private static async Task<(Guid WalletId, string CustomerId)> CreateFundedWalletAsync(WalletService walletService, long openingBalanceKobo)
     {
+        var customerId = $"cust-{Guid.NewGuid():N}";
         var wallet = await walletService.CreateWalletAsync(
-            new CreateWalletRequest($"cust-{Guid.NewGuid():N}"), CancellationToken.None);
+            new CreateWalletRequest(customerId), customerId, CancellationToken.None);
         await walletService.CreditWalletAsync(
-            wallet.WalletId, new CreditWalletRequest(openingBalanceKobo, "opening balance"), CancellationToken.None);
-        return wallet.WalletId;
+            wallet.WalletId, new CreditWalletRequest(openingBalanceKobo, "opening balance"), customerId, CancellationToken.None);
+        return (wallet.WalletId, customerId);
     }
 }

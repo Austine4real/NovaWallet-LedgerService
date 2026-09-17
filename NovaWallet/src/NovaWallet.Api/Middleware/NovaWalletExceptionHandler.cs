@@ -27,6 +27,8 @@ public class NovaWalletExceptionHandler : IExceptionHandler
             InvalidAmountException => (StatusCodes.Status400BadRequest, "Invalid amount"),
             IdempotencyKeyConflictException => (StatusCodes.Status409Conflict, "Idempotency key conflict"),
             IdempotencyKeyMissingException => (StatusCodes.Status400BadRequest, "Idempotency-Key header required"),
+            BalanceOverflowException => (StatusCodes.Status422UnprocessableEntity, "Balance overflow"),
+            ForbiddenException => (StatusCodes.Status403Forbidden, "Forbidden"),
             _ => (0, string.Empty)
         };
 
@@ -52,6 +54,12 @@ public class NovaWalletExceptionHandler : IExceptionHandler
             Instance = httpContext.Request.Path
         };
         problemDetails.Extensions["correlationId"] = httpContext.TraceIdentifier;
+
+        // A handful of exceptions carry data worth exposing to the caller
+        // beyond the message - e.g. so a client hitting "customer already
+        // has a wallet" doesn't need a second call just to find its id.
+        if (exception is CustomerAlreadyHasWalletException conflict)
+            problemDetails.Extensions["walletId"] = conflict.WalletId;
 
         httpContext.Response.StatusCode = statusCode;
         httpContext.Response.ContentType = "application/problem+json";

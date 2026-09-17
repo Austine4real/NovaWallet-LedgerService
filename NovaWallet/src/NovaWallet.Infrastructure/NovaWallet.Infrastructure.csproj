@@ -19,6 +19,12 @@
          scope per poll cycle; referenced explicitly rather than relying on
          it arriving transitively via EF Core. -->
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+    <!-- Microsoft.Data.SqlClient arrives transitively via
+         Microsoft.EntityFrameworkCore.SqlServer, but UnitOfWork references
+         SqlException directly (to detect unique-constraint violations), so
+         it's referenced explicitly here rather than relying on the
+         transitive version. -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\NovaWallet.Application\NovaWallet.Application.csproj" />

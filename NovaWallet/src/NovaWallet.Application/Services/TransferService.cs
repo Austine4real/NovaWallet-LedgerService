@@ -22,7 +22,7 @@ public class TransferService
         _clock = clock;
     }
 
-    public async Task<TransferResponse> TransferAsync(TransferRequest request, string idempotencyKey, CancellationToken ct)
+    public async Task<TransferResponse> TransferAsync(TransferRequest request, string idempotencyKey, string callerCustomerId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(idempotencyKey))
             throw new IdempotencyKeyMissingException();
@@ -42,27 +42,30 @@ public class TransferService
         await using var tx = await _uow.BeginTransactionAsync(TransactionIsolation.ReadCommitted, ct);
         try
         {
-            // --- Lock both wallets FIRST, in a fixed, deterministic order
-            // --- (independent of which one is "from" and which is "to") so
-            // --- two transfers moving money in opposite directions between
-            // --- the same pair of wallets can never deadlock each other.
-            //
-            // --- Locking before the idempotency check (rather than after) is
-            // --- deliberate: a genuine replay of the same Idempotency-Key
-            // --- carries the same payload, and therefore targets the same
-            // --- two wallets. Two concurrent replays contend on the same
-            // --- wallet locks, so the second one only reaches the
-            // --- idempotency check after the first has already committed -
-            // --- guaranteeing it sees "already processed" instead of racing
-            // --- the first request to a raw primary-key conflict.
-            var (firstId, secondId) = OrderIds(request.FromWalletId, request.ToWalletId);
-            var firstWallet = await _uow.Wallets.GetForUpdateAsync(firstId, ct)
-                ?? throw new WalletNotFoundException(firstId);
-            var secondWallet = await _uow.Wallets.GetForUpdateAsync(secondId, ct)
-                ?? throw new WalletNotFoundException(secondId);
+            // --- Lock the idempotency key itself FIRST, before anything else.
+            // ---
+            // --- Locking the two wallets (further down) alone would only
+            // --- serialize replays that happen to target the same wallets -
+            // --- true for a genuine retry, but not for the narrower case of
+            // --- the same key reused with a different payload pointing at
+            // --- different wallets. An advisory lock keyed on the
+            // --- idempotency key itself closes that gap too: ANY two
+            // --- concurrent requests carrying the same key now serialize
+            // --- here, regardless of which wallets their payloads reference.
+            await _uow.IdempotencyKeys.AcquireProcessingLockAsync(idempotencyKey, ct);
 
-            var fromWallet = firstWallet.Id == request.FromWalletId ? firstWallet : secondWallet;
-            var toWallet = firstWallet.Id == request.ToWalletId ? firstWallet : secondWallet;
+            // --- Authorize against the source wallet before doing anything
+            // --- else - including before returning a cached idempotent
+            // --- response. Without this, knowing a valid Idempotency-Key and
+            // --- payload could become a way to read the result of someone
+            // --- else's transfer. A plain (unlocked) read is enough here:
+            // --- CustomerId is immutable after a wallet is created, so this
+            // --- check doesn't need the row lock that the actual balance
+            // --- mutation further down does.
+            var sourceForAuthorization = await _uow.Wallets.GetAsync(request.FromWalletId, ct)
+                ?? throw new WalletNotFoundException(request.FromWalletId);
+            if (!string.Equals(sourceForAuthorization.CustomerId, callerCustomerId, StringComparison.Ordinal))
+                throw new ForbiddenException($"You do not have access to wallet '{sourceForAuthorization.Id}'.");
 
             var existingKey = await _uow.IdempotencyKeys.FindAsync(idempotencyKey, ct);
             if (existingKey is not null)
@@ -74,14 +77,29 @@ public class TransferService
                 return JsonSerializer.Deserialize<TransferResponse>(existingKey.ResponseBody)!;
             }
 
+            // --- New transfer: lock both wallets in a fixed, deterministic
+            // --- order (independent of which one is "from" and which is
+            // --- "to") so two transfers moving money in opposite directions
+            // --- between the same pair of wallets can never deadlock.
+            var (firstId, secondId) = OrderIds(request.FromWalletId, request.ToWalletId);
+            var firstWallet = await _uow.Wallets.GetForUpdateAsync(firstId, ct)
+                ?? throw new WalletNotFoundException(firstId);
+            var secondWallet = await _uow.Wallets.GetForUpdateAsync(secondId, ct)
+                ?? throw new WalletNotFoundException(secondId);
+
+            var fromWallet = firstWallet.Id == request.FromWalletId ? firstWallet : secondWallet;
+            var toWallet = firstWallet.Id == request.ToWalletId ? firstWallet : secondWallet;
+
             // --- Daily outbound limit, reset at WAT midnight. Computed from
             // --- the already-committed TransferOut rows for today, read
-            // --- under lock.
+            // --- under lock. Written as a subtraction rather than
+            // --- "alreadySent + requested > limit" so the comparison itself
+            // --- can't overflow even in a pathological input case.
             var today = _clock.UtcNow.ToWatDate();
             var alreadySentToday = await _uow.Transactions.SumAmountAsync(
                 fromWallet.Id, TransactionType.TransferOut, today, ct);
 
-            if (alreadySentToday + request.AmountKobo > DailyLimitKobo)
+            if (alreadySentToday > DailyLimitKobo || request.AmountKobo > DailyLimitKobo - alreadySentToday)
                 throw new DailyLimitExceededException(fromWallet.Id, DailyLimitKobo);
 
             fromWallet.Debit(request.AmountKobo);

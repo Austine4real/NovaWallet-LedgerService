@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using NovaWallet.Api.Auth;
 using NovaWallet.Application.DTOs;
 using NovaWallet.Application.Services;
 using NovaWallet.Domain.Exceptions;
@@ -28,7 +29,7 @@ public class TransfersController : ControllerBase
         if (string.IsNullOrWhiteSpace(idempotencyKey))
             throw new IdempotencyKeyMissingException();
 
-        var result = await _transferService.TransferAsync(request, idempotencyKey, ct);
+        var result = await _transferService.TransferAsync(request, idempotencyKey, User.GetCustomerId(), ct);
         return Ok(result);
     }
 }

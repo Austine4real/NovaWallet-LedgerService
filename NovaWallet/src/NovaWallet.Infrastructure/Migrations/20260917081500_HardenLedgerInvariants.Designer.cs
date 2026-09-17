@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Microsoft.EntityFrameworkCore.Migrations;
 using NovaWallet.Infrastructure.Persistence;
 
 #nullable disable
@@ -11,9 +12,10 @@ using NovaWallet.Infrastructure.Persistence;
 namespace NovaWallet.Infrastructure.Migrations
 {
     [DbContext(typeof(NovaWalletDbContext))]
-    partial class NovaWalletDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260917081500_HardenLedgerInvariants")]
+    partial class HardenLedgerInvariants
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

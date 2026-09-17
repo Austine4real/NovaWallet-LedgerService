@@ -39,6 +39,13 @@ builder.Services.AddScoped<JwtTokenService>();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        // Without this, some JWT handler configurations silently remap the
+        // "sub" claim to a legacy XML claim type (ClaimTypes.NameIdentifier)
+        // for backwards compatibility. That remapping would silently break
+        // every ClaimsPrincipalExtensions.GetCustomerId() lookup and the
+        // rate limiter's partition key below, both of which read "sub"
+        // literally.
+        options.MapInboundClaims = false;
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -49,6 +56,29 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SigningKey))
         };
+        options.Events = new JwtBearerEvents
+        {
+            // By default a missing/invalid/expired token just gets a bare
+            // 401 with no body - inconsistent with every other error this
+            // API returns. This makes auth failures Problem Details too.
+            OnChallenge = async context =>
+            {
+                context.HandleResponse();
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.ContentType = "application/problem+json";
+
+                var problem = new Microsoft.AspNetCore.Mvc.ProblemDetails
+                {
+                    Status = StatusCodes.Status401Unauthorized,
+                    Title = "Unauthorized",
+                    Detail = "A valid bearer token is required for this endpoint.",
+                    Type = "https://novawallet.firstbank.example/problems/unauthorized",
+                    Instance = context.Request.Path
+                };
+                problem.Extensions["correlationId"] = context.HttpContext.TraceIdentifier;
+                await context.Response.WriteAsJsonAsync(problem);
+            }
+        };
     });
 builder.Services.AddAuthorization();
 
@@ -56,9 +86,34 @@ builder.Services.AddAuthorization();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Same Problem Details treatment as the 401 case above - the default
+    // rejection here is a bare status code with no body.
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.ContentType = "application/problem+json";
+        var problem = new Microsoft.AspNetCore.Mvc.ProblemDetails
+        {
+            Status = StatusCodes.Status429TooManyRequests,
+            Title = "Too many requests",
+            Detail = "Rate limit exceeded for this endpoint. Try again shortly.",
+            Type = "https://novawallet.firstbank.example/problems/rate-limited",
+            Instance = context.HttpContext.Request.Path
+        };
+        problem.Extensions["correlationId"] = context.HttpContext.TraceIdentifier;
+        await context.HttpContext.Response.WriteAsJsonAsync(problem, ct);
+    };
+
     options.AddPolicy("transfers", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: httpContext.User.Identity?.Name ?? httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
+            // Read the "sub" claim explicitly rather than Identity.Name -
+            // our JWT never sets a claim that Identity.Name reads from, so
+            // that would always be null and this would silently fall back
+            // to IP-based limiting for every authenticated caller, which is
+            // not what "per authenticated subject" is supposed to mean.
+            partitionKey: httpContext.User.FindFirst("sub")?.Value
+                ?? httpContext.Connection.RemoteIpAddress?.ToString()
+                ?? "anonymous",
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 10,
@@ -132,6 +187,11 @@ using (var scope = app.Services.CreateScope())
             Thread.Sleep(delay);
         }
     }
+
+    // Audit-log immutability (a database trigger, not just application code)
+    // and the ledger's CHECK constraints/foreign keys now live in the
+    // HardenLedgerInvariants migration, applied by Database.Migrate() above -
+    // no separate ad-hoc raw-SQL step needed here.
 }
 
 app.UseSwagger();

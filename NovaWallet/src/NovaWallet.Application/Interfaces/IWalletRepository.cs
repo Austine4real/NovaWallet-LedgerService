@@ -9,6 +9,21 @@ public interface IWalletRepository
     Task<bool> CustomerHasWalletAsync(string customerId, CancellationToken ct);
     Task<bool> ExistsAsync(Guid walletId, CancellationToken ct);
 
+    /// <summary>Looks up a customer's existing wallet by customer id (not wallet id) - used
+    /// to report which wallet already exists when CreateWallet hits a duplicate.</summary>
+    Task<Wallet?> GetByCustomerIdAsync(string customerId, CancellationToken ct);
+
+    /// <summary>
+    /// Acquires a transaction-scoped SQL Server application lock keyed on the
+    /// customer id, before any row exists to place a row-lock on. This closes
+    /// the check-then-insert race in CreateWallet at its root: two concurrent
+    /// requests for the same customer id now serialize on this lock, so the
+    /// second one only reaches the "does a wallet already exist?" check after
+    /// the first has already committed (or rolled back) - it never gets a
+    /// chance to see a false "not yet created" and insert a duplicate.
+    /// </summary>
+    Task AcquireCustomerCreationLockAsync(string customerId, CancellationToken ct);
+
     /// <summary>Plain read, no locking. Safe for balance inquiries / statements.</summary>
     Task<Wallet?> GetAsync(Guid walletId, CancellationToken ct);
 

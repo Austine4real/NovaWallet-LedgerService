@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using NovaWallet.Application.Interfaces;
 using NovaWallet.Domain.Entities;
@@ -14,6 +16,38 @@ public class WalletRepository : IWalletRepository
 
     public Task<bool> CustomerHasWalletAsync(string customerId, CancellationToken ct)
         => _db.Wallets.AnyAsync(w => w.CustomerId == customerId, ct);
+
+    public Task<Wallet?> GetByCustomerIdAsync(string customerId, CancellationToken ct)
+        => _db.Wallets.AsNoTracking().SingleOrDefaultAsync(w => w.CustomerId == customerId, ct);
+
+    /// <summary>
+    /// sp_getapplock is SQL Server's advisory-lock mechanism - a lock on a
+    /// named resource string, not on any actual row. That's exactly what's
+    /// needed here: before a customer has a wallet, there's no row to place
+    /// UPDLOCK/ROWLOCK on (that's what GetForUpdateAsync uses elsewhere).
+    /// @LockOwner = 'Transaction' ties the lock's lifetime to the enclosing
+    /// transaction, so it releases automatically on commit or rollback - no
+    /// manual unlock call needed. The customer id is hashed only to keep the
+    /// resource name short and free of characters sp_getapplock might treat
+    /// specially; it's not for secrecy.
+    /// </summary>
+    public async Task AcquireCustomerCreationLockAsync(string customerId, CancellationToken ct)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(customerId)));
+        var resource = $"NovaWallet:CreateWallet:{hash}";
+
+        await _db.Database.ExecuteSqlInterpolatedAsync($$"""
+            DECLARE @result int;
+            EXEC @result = sys.sp_getapplock
+                @Resource = {{resource}},
+                @LockMode = 'Exclusive',
+                @LockOwner = 'Transaction',
+                @LockTimeout = 15000;
+
+            IF @result < 0
+                THROW 51003, 'Unable to acquire wallet creation lock.', 1;
+            """, ct);
+    }
 
     public Task<bool> ExistsAsync(Guid walletId, CancellationToken ct)
         => _db.Wallets.AsNoTracking().AnyAsync(w => w.Id == walletId, ct);
