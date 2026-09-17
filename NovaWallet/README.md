@@ -126,6 +126,12 @@ and, at the database layer, `AuditLog_DatabaseRejectsUpdate` and
 `FailedTransfer_DoesNotAppendAuditRows` in `DailyLimitAndAuditTests.cs` cover related invariants
 introduced alongside this change.
 
+The primary case - genuinely concurrent replays with the *same* key and *same* payload - is
+covered by a dedicated test (`Transfer_SameKeySamePayload_ConcurrentReplays_ProcessedExactlyOnce`)
+that fires 8 identical requests in parallel and asserts the debit happened exactly once and every
+response agrees on the same `TransferGroupId`, rather than relying only on sequential replay tests
+to stand in for a concurrency guarantee.
+
 ## Repository pattern + Unit of Work
 
 `Application` depends only on its own interfaces (`IWalletRepository`, `ITransactionRepository`,
@@ -323,6 +329,14 @@ review I'd want a panelist to do - and fixed everything that held up under scrut
   would be the next step for real observability but wasn't essential to demonstrate here.
 
 ## How to run
+
+> ⚠️ **Before submitting: the generated `Migrations/` folder must be committed to this repo.**
+> A fresh `git clone` + `docker compose up` will only create the database schema automatically if
+> the migration files are actually checked in - `Database.Migrate()` on startup applies whatever
+> migrations it finds, but applies nothing if the `Migrations/` folder is empty or missing. This
+> is the single most important thing to double-check before handing this over: run
+> `git status` after generating migrations locally and confirm `Migrations/*.cs` shows up as
+> tracked, not ignored, before your final commit.
 
 Requires Docker and Docker Compose.
 
