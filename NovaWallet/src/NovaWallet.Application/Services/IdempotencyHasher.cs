@@ -4,10 +4,7 @@ using System.Text.Json;
 
 namespace NovaWallet.Application.Services;
 
-/// <summary>
-/// Produces a stable hash of a request payload so a replayed Idempotency-Key
-/// can be checked against the *original* payload, not just trusted blindly.
-/// </summary>
+
 public static class IdempotencyHasher
 {
     private static readonly JsonSerializerOptions Options = new() { PropertyNamingPolicy = null };
